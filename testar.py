@@ -1,124 +1,126 @@
-"""
-testar.py - Avalia o leitor de gabaritos (pacote omr) em todo o dataset.
+# testa o leitor em todas as fotos do dataset e compara com o gabarito do CSV
+#
+# uso: python testar.py
+#      python testar.py --mostrar 5   (tambem abre as 5 piores imagens)
 
-Uso:
-    python testar.py               # relatório de acurácia
-    python testar.py --mostrar 5   # além disso, abre as 5 piores imagens
-"""
-
-import argparse
-from collections import Counter
+import sys
 from pathlib import Path
 
 import pandas as pd
 
-import omr
+from configuracoes import EM_BRANCO, MAIS_DE_UMA_MARCADA, TOTAL_DE_QUESTOES
+from preprocessamento import carregar_imagem
+from desenho import desenhar_respostas, mostrar_imagem
+from omr import ler_gabarito, GabaritoNaoDetectado
 
-BASE = Path(__file__).parent
-PASTA_IMAGENS = BASE / "omr_dataset" / "OMR_Image_Resized"
-ARQUIVO_CSV = BASE / "omr_dataset" / "OMR_Ans.csv"
-
-# O CSV usa palavras para questão em branco / múltipla marcação.
-# Traduzimos para os mesmos símbolos que o pacote omr devolve.
-TRADUCAO = {"BLANK": omr.EM_BRANCO, "MULTI": omr.MULTIPLA}
+PASTA_DO_PROJETO = Path(__file__).parent
+PASTA_DAS_IMAGENS = PASTA_DO_PROJETO / "omr_dataset" / "OMR_Image_Resized"
+ARQUIVO_DO_GABARITO = PASTA_DO_PROJETO / "omr_dataset" / "OMR_Ans.csv"
 
 
-def normalizar(valor):
-    """Valor do CSV -> 'A'..'D', '-' ou '*'."""
+def converter_resposta_do_csv(valor):
+    # no CSV a questao em branco aparece como BLANK e a com mais de uma marcada como MULTI
     if pd.isna(valor):
-        return omr.EM_BRANCO
+        return EM_BRANCO
     texto = str(valor).strip().upper()
-    return TRADUCAO.get(texto, texto)
+    if texto == "BLANK":
+        return EM_BRANCO
+    if texto == "MULTI":
+        return MAIS_DE_UMA_MARCADA
+    return texto
 
 
-def classificar_erro(lida, esperada):
-    """Dá um nome ao tipo de erro (para entender onde o programa falha)."""
-    if lida == omr.EM_BRANCO:
+def descobrir_tipo_do_erro(resposta_lida, resposta_certa):
+    if resposta_lida == EM_BRANCO:
         return "Leu em BRANCO, mas havia marcação"
-    if lida == omr.MULTIPLA:
+    if resposta_lida == MAIS_DE_UMA_MARCADA:
         return "Leu DUPLA, mas não era"
-    if esperada == omr.EM_BRANCO:
+    if resposta_certa == EM_BRANCO:
         return "Leu uma letra, mas o gabarito diz BRANCO"
-    if esperada == omr.MULTIPLA:
+    if resposta_certa == MAIS_DE_UMA_MARCADA:
         return "Leu uma letra, mas o gabarito diz DUPLA"
     return "Trocou de letra (A/B/C/D)"
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Avalia o leitor OMR no dataset.")
-    parser.add_argument("--mostrar", type=int, default=0, metavar="N",
-                        help="abre as N piores imagens (verde=acertou, "
-                             "vermelho=errou, amarelo=resposta do CSV)")
-    args = parser.parse_args()
+    quantidade_para_mostrar = 0
+    if "--mostrar" in sys.argv:
+        posicao = sys.argv.index("--mostrar")
+        if posicao + 1 < len(sys.argv):
+            quantidade_para_mostrar = int(sys.argv[posicao + 1])
 
-    df = pd.read_csv(ARQUIVO_CSV).dropna(subset=["Image_ID"])
+    tabela = pd.read_csv(ARQUIVO_DO_GABARITO)
+    tabela = tabela.dropna(subset=["Image_ID"])   # o CSV tem umas linhas vazias no final
 
-    total_acertos = 0
-    total_questoes = 0
-    erros = Counter()
-    resultados = []        # (acertos, id_imagem)
-    leituras = {}          # id_imagem -> (respostas, questoes), para as janelas
-    falhas = []
+    total_de_acertos = 0
+    total_de_questoes = 0
+    tipos_de_erro = {}
+    resultados = []           # (acertos, numero_da_imagem)
+    leituras = {}             # guarda o que foi lido pra poder mostrar as imagens no final
+    imagens_com_falha = []
 
-    print(f"Avaliando {len(df)} imagens...")
-    for _, linha in df.iterrows():
-        id_imagem = int(linha["Image_ID"])
-        esperado = [normalizar(v) for v in linha.iloc[1:]]
-        total_questoes += len(esperado)
+    print(f"Avaliando {len(tabela)} imagens...")
+    for _, linha in tabela.iterrows():
+        numero_da_imagem = int(linha["Image_ID"])
+        respostas_certas = [converter_resposta_do_csv(valor) for valor in linha.iloc[1:]]
+        total_de_questoes += len(respostas_certas)
 
         try:
-            imagem = omr.carregar_imagem(PASTA_IMAGENS / f"{id_imagem}.jpg")
-            respostas, questoes = omr.ler_gabarito(imagem)
-        except (FileNotFoundError, omr.GabaritoNaoDetectado):
-            falhas.append(id_imagem)       # conta como 0 acertos
-            resultados.append((0, id_imagem))
+            imagem = carregar_imagem(PASTA_DAS_IMAGENS / f"{numero_da_imagem}.jpg")
+            respostas, questoes = ler_gabarito(imagem)
+        except (FileNotFoundError, GabaritoNaoDetectado):
+            # se nao conseguiu ler a imagem conta como 0 acertos
+            imagens_com_falha.append(numero_da_imagem)
+            resultados.append((0, numero_da_imagem))
             continue
 
-        leituras[id_imagem] = (respostas, questoes)
+        leituras[numero_da_imagem] = (respostas, questoes, respostas_certas)
         acertos = 0
-        for lida, certa in zip(respostas, esperado):
-            if lida == certa:
+        for resposta_lida, resposta_certa in zip(respostas, respostas_certas):
+            if resposta_lida == resposta_certa:
                 acertos += 1
             else:
-                erros[classificar_erro(lida, certa)] += 1
+                tipo = descobrir_tipo_do_erro(resposta_lida, resposta_certa)
+                tipos_de_erro[tipo] = tipos_de_erro.get(tipo, 0) + 1
 
-        total_acertos += acertos
-        resultados.append((acertos, id_imagem))
+        total_de_acertos += acertos
+        resultados.append((acertos, numero_da_imagem))
 
-    # ----- Relatório -----
-    perfeitas = sum(1 for acertos, _ in resultados if acertos == omr.TOTAL_QUESTOES)
+    imagens_perfeitas = 0
+    for acertos, numero_da_imagem in resultados:
+        if acertos == TOTAL_DE_QUESTOES:
+            imagens_perfeitas += 1
+
     print("=" * 50)
     print(f"Imagens avaliadas:         {len(resultados)}")
-    print(f"Imagens com falha:         {len(falhas)}")
-    print(f"Imagens 100% corretas:     {perfeitas}")
-    print(f"Questões corretas:         {total_acertos} de {total_questoes}")
-    print(f"ACURÁCIA:                  {100 * total_acertos / total_questoes:.1f}%")
+    print(f"Imagens com falha:         {len(imagens_com_falha)}")
+    print(f"Imagens 100% corretas:     {imagens_perfeitas}")
+    print(f"Questões corretas:         {total_de_acertos} de {total_de_questoes}")
+    print(f"ACURÁCIA:                  {100 * total_de_acertos / total_de_questoes:.1f}%")
     print("=" * 50)
 
-    if erros:
+    if len(tipos_de_erro) > 0:
         print("\nTipos de erro:")
-        for tipo, quantidade in erros.most_common():
-            print(f"  {quantidade:4d}  {tipo}")
+        erros_ordenados = sorted(tipos_de_erro.items(), key=lambda item: item[1], reverse=True)
+        for tipo, quantidade in erros_ordenados:
+            print(f"  {quantidade}  {tipo}")
 
     piores = sorted(resultados)[:10]
     print("\nAs 10 piores imagens:")
-    for acertos, id_imagem in piores:
-        print(f"  {id_imagem}.jpg -> {acertos}/{omr.TOTAL_QUESTOES}")
-    if falhas:
-        print("\nImagens em que a detecção falhou:", falhas)
+    for acertos, numero_da_imagem in piores:
+        print(f"  {numero_da_imagem}.jpg -> {acertos}/{TOTAL_DE_QUESTOES}")
+    if len(imagens_com_falha) > 0:
+        print("\nImagens em que a detecção falhou:", imagens_com_falha)
 
-    # ----- Janelas com as piores imagens -----
-    for acertos, id_imagem in piores[: args.mostrar]:
-        if id_imagem not in leituras:
+    # abre as piores imagens, ESC fecha
+    for acertos, numero_da_imagem in piores[:quantidade_para_mostrar]:
+        if numero_da_imagem not in leituras:
             continue
-        respostas, questoes = leituras[id_imagem]
-        linha = df[df["Image_ID"] == id_imagem].iloc[0, 1:]
-        esperado = [normalizar(v) for v in linha]
-
-        imagem = omr.carregar_imagem(PASTA_IMAGENS / f"{id_imagem}.jpg")
-        desenho = omr.desenhar_respostas(imagem, questoes, respostas, esperado)
-        titulo = f"Imagem {id_imagem}: {acertos}/{omr.TOTAL_QUESTOES} (ESC para sair)"
-        if omr.mostrar_janela(titulo, desenho) == 27:
+        respostas, questoes, respostas_certas = leituras[numero_da_imagem]
+        imagem = carregar_imagem(PASTA_DAS_IMAGENS / f"{numero_da_imagem}.jpg")
+        desenho = desenhar_respostas(imagem, questoes, respostas, respostas_certas)
+        titulo = f"Imagem {numero_da_imagem}: {acertos}/{TOTAL_DE_QUESTOES} (ESC para sair)"
+        if mostrar_imagem(titulo, desenho) == 27:
             break
 
 
