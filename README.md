@@ -32,13 +32,6 @@ foto -> pré-processamento -> detecção das bolinhas -> organização -> leitur
 4. **Organização** (`organizacao.py`). As 120 bolinhas saem desordenadas e viram 30 questões: separação em 3 colunas por `x`, ordenação por `y` dentro de cada coluna, grupos de 4 e ordenação por `x` para obter A, B, C, D.
 5. **Leitura** (`leitura.py`). Para cada bolinha, uma máscara circular mede a fração de pixels escuros no miolo (`bitwise_and` + `countNonZero`). Acima do limite, a bolinha está marcada. Resultado por questão: letra, `-` (em branco) ou `*` (mais de uma marcada).
 
-## Decisões técnicas e problemas resolvidos
-
-- **`RETR_EXTERNAL` encontrava só 20 das 120 bolinhas.** As linhas da tabela formam caixinhas fechadas, e esse modo ignora formas dentro de outra forma. Trocar por `RETR_CCOMP` (descartando os "buracos" dos anéis pela hierarquia) resolveu.
-- **Resultados quase idênticos de 0.4 a 0.6 no limite de preenchimento.** Escolhi 0.5, no meio da faixa estável, em vez do valor que empatou por acaso.
-- **Uma bolinha faltando derrubava a imagem inteira.** Em 2 fotos, um rabisco ao lado de uma bolinha impedia a detecção (119 de 120). Agora o código identifica a linha incompleta e recria a bolinha. A acurácia subiu de 97,7% para 98,9%.
-- **Análise de erros antes de ajustar.** Foi a contagem de erros por tipo que mostrou que o gargalo era a detecção, e não a leitura. Sem isso, eu teria gasto tempo ajustando o limite de preenchimento, que quase não influenciava.
-
 ## Estrutura
 
 ```
